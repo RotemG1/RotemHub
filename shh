@@ -1,0 +1,740 @@
+--// Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LP = Players.LocalPlayer
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+--// Load Rayfield UI Library
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+--// Auto-Farm System
+local autoFarm = {
+    enabled = false,
+    targetEnemyName = "",
+    currentEnemy = nil,
+    attackRemote = nil,
+    state = "behind",
+    stateTimer = 0,
+    rotationConnections = {},
+    rotationThreads = {}
+}
+
+--// Auto-Flashstep System
+local autoFlashstep = {
+    enabled = false,
+    remote = nil
+}
+
+--// Telespeed System
+local telespeed = {
+    enabled = false,
+    multiplier = 2,
+    remote = nil,
+    originalSpeed = 16
+}
+
+--// Auto-Block System
+local autoBlock = {
+    enabled = false,
+    remote = nil,
+    lastBlockState = false
+}
+
+--// Auto-Move System
+local autoMove = {
+    enabled = false,
+    remote = nil,
+    selectedSlot = "1"
+}
+
+--// Anti-AFK System
+local antiAfk = {
+    enabled = true,
+    lastAction = tick()
+}
+
+--// Forward declarations
+local startAggressiveRotation
+local stopAggressiveRotation
+local forceRotation
+
+--// Initialize remotes
+task.wait(1)
+autoFarm.attackRemote = LP.Backpack:FindFirstChild("Input") or LP.Character:FindFirstChild("Input")
+autoFlashstep.remote = LP.Backpack:FindFirstChild("Input")
+autoBlock.remote = LP.Backpack:FindFirstChild("Input")
+autoMove.remote = LP.Backpack:FindFirstChild("Input")
+telespeed.remote = LP.Backpack:FindFirstChild("Input")
+
+--// Create Rayfield Window
+local Window = Rayfield:CreateWindow({
+    Name = "Rotem's Hub",
+    LoadingTitle = "Rotem's Hub",
+    LoadingSubtitle = "by Rotem",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = nil,
+        FileName = "RotemsHub"
+    },
+    Discord = {
+        Enabled = false
+    },
+    KeySystem = false
+})
+
+--// Helper function to get all unique enemy names
+local function getAllEnemyNames()
+    local enemies = {}
+    local seen = {}
+    
+    for _, enemy in pairs(workspace.Enemies:GetChildren()) do
+        if not seen[enemy.Name] then
+            table.insert(enemies, enemy.Name)
+            seen[enemy.Name] = true
+        end
+    end
+    
+    table.sort(enemies)
+    return enemies
+end
+
+--// Create Tabs
+local AutoFarmTab = Window:CreateTab("Auto Farm", 4483362458)
+local AutoMoveTab = Window:CreateTab("Auto Move", 4483362458)
+local MiscTab = Window:CreateTab("Miscellaneous", 4483362458)
+local InfoTab = Window:CreateTab("Information", 4483362458)
+
+--// AUTO FARM TAB
+local AutoFarmSection = AutoFarmTab:CreateSection("Auto Farm Settings")
+
+local AutoFarmToggle = AutoFarmTab:CreateToggle({
+    Name = "Enable Auto Farm",
+    CurrentValue = false,
+    Flag = "AutoFarmToggle",
+    Callback = function(Value)
+        autoFarm.enabled = Value
+        
+        if Value then
+            Rayfield:Notify({
+                Title = "Auto Farm",
+                Content = "Auto Farm Enabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        else
+            autoFarm.currentEnemy = nil
+            autoFarm.stateTimer = 0
+            autoFarm.state = "behind"
+            stopAggressiveRotation()
+            Rayfield:Notify({
+                Title = "Auto Farm",
+                Content = "Auto Farm Disabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        end
+    end
+})
+
+local EnemyDropdown = AutoFarmTab:CreateDropdown({
+    Name = "Select Enemy to Farm",
+    Options = {"Any Enemy"},
+    CurrentOption = {"Any Enemy"},
+    MultipleOptions = false,
+    Flag = "EnemyDropdown",
+    Callback = function(Option)
+        if Option[1] == "Any Enemy" then
+            autoFarm.targetEnemyName = ""
+        else
+            autoFarm.targetEnemyName = Option[1]
+        end
+        autoFarm.currentEnemy = nil
+        
+        Rayfield:Notify({
+            Title = "Target Set",
+            Content = "Farming: " .. Option[1],
+            Duration = 3,
+            Image = 4483362458
+        })
+    end
+})
+
+local RefreshEnemiesButton = AutoFarmTab:CreateButton({
+    Name = "Refresh Enemy List",
+    Callback = function()
+        local enemies = getAllEnemyNames()
+        table.insert(enemies, 1, "Any Enemy")
+        EnemyDropdown:Refresh(enemies)
+        
+        Rayfield:Notify({
+            Title = "Enemy List",
+            Content = "Found " .. (#enemies - 1) .. " enemy types!",
+            Duration = 3,
+            Image = 4483362458
+        })
+    end
+})
+
+local ManualEnemyInput = AutoFarmTab:CreateInput({
+    Name = "Manual Enemy Name",
+    PlaceholderText = "Type enemy name (e.g., saibar)",
+    RemoveTextAfterFocusLost = false,
+    Callback = function(Text)
+        if Text ~= "" then
+            autoFarm.targetEnemyName = Text
+            autoFarm.currentEnemy = nil
+            
+            Rayfield:Notify({
+                Title = "Target Set",
+                Content = "Farming: " .. Text,
+                Duration = 3,
+                Image = 4483362458
+            })
+        end
+    end
+})
+
+--// AUTO MOVE TAB
+local AutoMoveSection = AutoMoveTab:CreateSection("Auto Move Settings")
+
+local AutoMoveToggle = AutoMoveTab:CreateToggle({
+    Name = "Enable Auto Move",
+    CurrentValue = false,
+    Flag = "AutoMoveToggle",
+    Callback = function(Value)
+        autoMove.enabled = Value
+        
+        if Value then
+            Rayfield:Notify({
+                Title = "Auto Move",
+                Content = "Auto Move Enabled (Slot " .. autoMove.selectedSlot .. ")",
+                Duration = 3,
+                Image = 4483362458
+            })
+        else
+            Rayfield:Notify({
+                Title = "Auto Move",
+                Content = "Auto Move Disabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        end
+    end
+})
+
+local SlotDropdown = AutoMoveTab:CreateDropdown({
+    Name = "Select Hotbar Slot",
+    Options = {"1", "2", "3", "4", "5", "6", "7", "8", "9"},
+    CurrentOption = {"1"},
+    MultipleOptions = false,
+    Flag = "SlotDropdown",
+    Callback = function(Option)
+        autoMove.selectedSlot = Option[1]
+        
+        Rayfield:Notify({
+            Title = "Slot Selected",
+            Content = "Using Hotbar Slot: " .. Option[1],
+            Duration = 3,
+            Image = 4483362458
+        })
+    end
+})
+
+AutoMoveTab:CreateLabel("Note: Auto Move only works during 'above' state")
+
+--// MISCELLANEOUS TAB
+local MiscSection = MiscTab:CreateSection("Additional Features")
+
+local AutoFlashstepToggle = MiscTab:CreateToggle({
+    Name = "Auto Flashstep",
+    CurrentValue = false,
+    Flag = "AutoFlashstepToggle",
+    Callback = function(Value)
+        autoFlashstep.enabled = Value
+        
+        if Value then
+            Rayfield:Notify({
+                Title = "Auto Flashstep",
+                Content = "Auto Flashstep Enabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        else
+            Rayfield:Notify({
+                Title = "Auto Flashstep",
+                Content = "Auto Flashstep Disabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        end
+    end
+})
+
+local AutoBlockToggle = MiscTab:CreateToggle({
+    Name = "Auto Block",
+    CurrentValue = false,
+    Flag = "AutoBlockToggle",
+    Callback = function(Value)
+        autoBlock.enabled = Value
+        
+        if Value then
+            Rayfield:Notify({
+                Title = "Auto Block",
+                Content = "Auto Block Enabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        else
+            pcall(function()
+                autoBlock.remote:FireServer("foff", {})
+            end)
+            autoBlock.lastBlockState = false
+            Rayfield:Notify({
+                Title = "Auto Block",
+                Content = "Auto Block Disabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        end
+    end
+})
+
+local AntiAFKToggle = MiscTab:CreateToggle({
+    Name = "Anti AFK",
+    CurrentValue = true,
+    Flag = "AntiAFKToggle",
+    Callback = function(Value)
+        antiAfk.enabled = Value
+        
+        if Value then
+            Rayfield:Notify({
+                Title = "Anti AFK",
+                Content = "Anti AFK Enabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        else
+            Rayfield:Notify({
+                Title = "Anti AFK",
+                Content = "Anti AFK Disabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        end
+    end
+})
+
+local TelespeedSection = MiscTab:CreateSection("Telespeed")
+
+local TelespeedToggle = MiscTab:CreateToggle({
+    Name = "Enable Telespeed",
+    CurrentValue = false,
+    Flag = "TelespeedToggle",
+    Callback = function(Value)
+        telespeed.enabled = Value
+        
+        if Value then
+            Rayfield:Notify({
+                Title = "Telespeed",
+                Content = "Telespeed Enabled! (x" .. telespeed.multiplier .. ")",
+                Duration = 3,
+                Image = 4483362458
+            })
+        else
+            Rayfield:Notify({
+                Title = "Telespeed",
+                Content = "Telespeed Disabled!",
+                Duration = 3,
+                Image = 4483362458
+            })
+        end
+    end
+})
+
+local TelespeedSlider = MiscTab:CreateSlider({
+    Name = "Speed Multiplier",
+    Range = {1, 10},
+    Increment = 0.5,
+    CurrentValue = 2,
+    Flag = "TelespeedSlider",
+    Callback = function(Value)
+        telespeed.multiplier = Value
+        Rayfield:Notify({
+            Title = "Telespeed",
+            Content = "Multiplier set to x" .. Value,
+            Duration = 2,
+            Image = 4483362458
+        })
+    end
+})
+
+--// INFORMATION TAB
+local InfoSection = InfoTab:CreateSection("Hub Information")
+
+InfoTab:CreateLabel("Made By Rotem")
+
+InfoTab:CreateParagraph({
+    Title = "Discord Server",
+    Content = "Join for updates, support, and more!\nhttps://discord.gg/YFxMahEDNd"
+})
+
+local DiscordButton = InfoTab:CreateButton({
+    Name = "Copy Discord Link",
+    Callback = function()
+        setclipboard("https://discord.gg/YFxMahEDNd")
+        Rayfield:Notify({
+            Title = "Discord Link",
+            Content = "Link copied to clipboard!",
+            Duration = 3,
+            Image = 4483362458
+        })
+    end
+})
+
+--// Anti-AFK function
+local function antiAfkFunc()
+    if antiAfk.enabled then
+        local now = tick()
+        if now - antiAfk.lastAction > 30 then
+            pcall(function()
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, nil)
+                task.wait(0.1)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, nil)
+            end)
+            antiAfk.lastAction = now
+        end
+    end
+end
+
+--// Aggressive rotation force function
+forceRotation = function()
+    if not LP.Character or not autoFarm.currentEnemy then return end
+    local root = LP.Character:FindFirstChild("HumanoidRootPart")
+    local enemyRoot = autoFarm.currentEnemy:FindFirstChild("HumanoidRootPart")
+    if not root or not enemyRoot then return end
+   
+    pcall(function()
+        local currentPos = root.Position
+        local time = tick()
+        local lookAtEnemy = CFrame.new(currentPos, enemyRoot.Position)
+        local x = math.sin(time * 50) * math.rad(70)
+        local y = math.cos(time * 30) * math.rad(30)
+        local z = math.sin(time * 43) * math.rad(80)
+       
+        root.CFrame = lookAtEnemy * CFrame.Angles(x, y, z)
+        root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+    end)
+end
+
+--// Stop aggressive rotation
+stopAggressiveRotation = function()
+    for _, conn in pairs(autoFarm.rotationConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    autoFarm.rotationConnections = {}
+    autoFarm.rotationThreads = {}
+   
+    if LP.Character then
+        local humanoid = LP.Character:FindFirstChild("Humanoid")
+        if humanoid then
+            humanoid.PlatformStand = false
+        end
+    end
+end
+
+--// Start aggressive rotation
+startAggressiveRotation = function()
+    if not LP.Character then return end
+    local root = LP.Character:FindFirstChild("HumanoidRootPart")
+    local humanoid = LP.Character:FindFirstChild("Humanoid")
+    if not root or not humanoid then return end
+   
+    stopAggressiveRotation()
+    humanoid.PlatformStand = true
+   
+    autoFarm.rotationConnections[1] = RunService.RenderStepped:Connect(forceRotation)
+    autoFarm.rotationConnections[2] = RunService.Heartbeat:Connect(forceRotation)
+    autoFarm.rotationConnections[3] = RunService.Stepped:Connect(forceRotation)
+   
+    for i = 1, 5 do
+        task.spawn(function()
+            while autoFarm.state == "above" and autoFarm.enabled do
+                task.wait()
+                pcall(forceRotation)
+            end
+        end)
+    end
+   
+    autoFarm.rotationConnections[4] = root:GetPropertyChangedSignal("CFrame"):Connect(forceRotation)
+end
+
+--// Find enemy by partial name match
+local function findEnemyByName(partialName)
+    if not LP.Character or partialName == "" then return nil end
+   
+    local root = LP.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+   
+    local bestMatch = nil
+    local nearestDistance = math.huge
+   
+    for _, enemy in pairs(workspace.Enemies:GetChildren()) do
+        if enemy:FindFirstChild("Humanoid") and enemy.Humanoid.Health > 0.11 then
+            if string.lower(enemy.Name):find(string.lower(partialName)) then
+                local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+                if enemyRoot then
+                    local distance = (root.Position - enemyRoot.Position).Magnitude
+                    if distance < nearestDistance then
+                        bestMatch = enemy
+                        nearestDistance = distance
+                    end
+                end
+            end
+        end
+    end
+   
+    return bestMatch
+end
+
+--// Teleport behind enemy
+local function teleportBehind(enemy)
+    if not LP.Character or not enemy then return end
+   
+    local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+    local playerRoot = LP.Character:FindFirstChild("HumanoidRootPart")
+    if not enemyRoot or not playerRoot then return end
+   
+    local angle = autoFarm.stateTimer * 8
+    local radius = 30
+    local offsetX = math.cos(angle) * radius
+    local offsetZ = math.sin(angle) * radius
+    local spinPosition = enemyRoot.Position + Vector3.new(offsetX, 3, offsetZ)
+   
+    playerRoot.CFrame = CFrame.new(spinPosition, enemyRoot.Position)
+end
+
+--// Teleport above enemy
+local function teleportAbove(enemy)
+    if not LP.Character or not enemy then return end
+   
+    local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+    local playerRoot = LP.Character:FindFirstChild("HumanoidRootPart")
+    if not enemyRoot or not playerRoot then return end
+   
+    local time = tick()
+    local circleRadius = 4
+    local circleSpeed = 30
+    local circleX = math.cos(time * circleSpeed) * circleRadius
+    local circleZ = math.sin(time * circleSpeed) * circleRadius
+   
+    local abovePosition = enemyRoot.Position + Vector3.new(circleX, 10, circleZ)
+    local currentRotation = playerRoot.CFrame - playerRoot.Position
+    playerRoot.CFrame = CFrame.new(abovePosition) * currentRotation
+end
+
+--// Spam M1 attacks
+local function spamM1()
+    if not autoFarm.attackRemote then return end
+   
+    pcall(function()
+        local arguments = {
+            [1] = "m1",
+            [2] = {
+                ["shift"] = false,
+                ["running"] = false,
+                ["velo"] = Vector3.new(0.9228367805480957, -0, -0.19507810473442078),
+                ["inair"] = false
+            }
+        }
+       
+        autoFarm.attackRemote:FireServer(unpack(arguments))
+    end)
+end
+
+--// Auto-Flashstep function
+local function autoFlashstepFunc()
+    if autoFlashstep.enabled and LP.Character and autoFlashstep.remote then
+        pcall(function()
+            autoFlashstep.remote:FireServer("flashstep", {
+                chara = LP.Character,
+                dir = Vector3.new(0.6795352101325989, 0, -0.7336429357528687),
+                opos = LP.Character.HumanoidRootPart.Position
+            })
+        end)
+    end
+end
+
+--// Telespeed function
+local function telespeedFunc()
+    if not telespeed.enabled then return end
+    if not LP.Character then return end
+    
+    local hrp = LP.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    if not telespeed.remote then return end
+    
+    pcall(function()
+        local lookVector = hrp.CFrame.LookVector
+        
+        telespeed.remote:FireServer("flashstep", {
+            chara = LP.Character,
+            dir = lookVector,
+            opos = hrp.Position
+        })
+        
+        local velocityBoost = lookVector * (100 * telespeed.multiplier)
+        hrp.AssemblyLinearVelocity = velocityBoost
+        
+        task.spawn(function()
+            for i = 1, 10 do
+                task.wait(0.03)
+                if hrp then
+                    hrp.AssemblyLinearVelocity = velocityBoost
+                end
+            end
+        end)
+    end)
+end
+
+--// Auto-Block function
+local function autoBlockFunc()
+    if autoBlock.enabled and LP.Character and autoBlock.remote then
+        pcall(function()
+            if not autoBlock.lastBlockState then
+                local arguments = {
+                    [1] = "f",
+                    [2] = {
+                        ["hit"] = CFrame.new(2556.273681640625, 62.95746612548828, -403.2821960449219, 0.9999133348464966, 0.006876306142657995, -0.011230605654418468, 4.656612873077393e-10, 0.8528370261192322, 0.5221773982048035, 0.013168525882065296, -0.522132158279419, 0.8527630567550659)
+                    }
+                }
+               
+                autoBlock.remote:FireServer(unpack(arguments))
+                autoBlock.lastBlockState = true
+            end
+        end)
+    elseif autoBlock.lastBlockState then
+        pcall(function()
+            autoBlock.remote:FireServer("foff", {})
+        end)
+        autoBlock.lastBlockState = false
+    end
+end
+
+--// Auto-Move function
+local function autoMoveFunc()
+    if autoMove.enabled and autoFarm.state == "above" and LP.Character and autoMove.remote then
+        pcall(function()
+            local arguments = {
+                [1] = "usemove",
+                [2] = {
+                    ["mousehit"] = CFrame.new(955.7493896484375, 89.40924072265625, -830.1439208984375, -0.10690075159072876, 0.5142485499382019, -0.8509528636932373, -0, 0.8558571934700012, 0.5172123312950134, 0.9942697286605835, 0.05529038608074188, -0.09149177372455597),
+                    ["HotbarGui"] = LP.PlayerGui.HUD.Hotbar.Bar[autoMove.selectedSlot]
+                }
+            }
+           
+            autoMove.remote:FireServer(unpack(arguments))
+        end)
+    end
+end
+
+--// Main farm loop
+RunService.Heartbeat:Connect(function(deltaTime)
+    if not autoFarm.enabled then return end
+   
+    autoFarm.stateTimer = autoFarm.stateTimer + deltaTime
+   
+    if not autoFarm.currentEnemy then
+        if autoFarm.targetEnemyName == "" then
+            local nearest = nil
+            local nearestDist = math.huge
+            for _, enemy in pairs(workspace.Enemies:GetChildren()) do
+                if enemy:FindFirstChild("Humanoid") and enemy.Humanoid.Health > 0.11 then
+                    local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+                    local playerRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+                    if enemyRoot and playerRoot then
+                        local dist = (playerRoot.Position - enemyRoot.Position).Magnitude
+                        if dist < nearestDist then
+                            nearest = enemy
+                            nearestDist = dist
+                        end
+                    end
+                end
+            end
+            autoFarm.currentEnemy = nearest
+        else
+            autoFarm.currentEnemy = findEnemyByName(autoFarm.targetEnemyName)
+        end
+       
+        if not autoFarm.currentEnemy then return end
+    end
+   
+    if not autoFarm.currentEnemy:FindFirstChild("Humanoid") or autoFarm.currentEnemy.Humanoid.Health <= 0.11 then
+        autoFarm.currentEnemy = nil
+        autoFarm.stateTimer = 0
+        autoFarm.state = "behind"
+        stopAggressiveRotation()
+        return
+    end
+   
+    if autoFarm.state == "behind" and autoFarm.stateTimer >= 0.5 then
+        autoFarm.state = "above"
+        autoFarm.stateTimer = 0
+        startAggressiveRotation()
+    elseif autoFarm.state == "above" and autoFarm.stateTimer >= 1.5 then
+        autoFarm.state = "behind"
+        autoFarm.stateTimer = 0
+        stopAggressiveRotation()
+    end
+   
+    if autoFarm.state == "behind" then
+        teleportBehind(autoFarm.currentEnemy)
+    else
+        teleportAbove(autoFarm.currentEnemy)
+        spamM1()
+        if autoMove.enabled then
+            autoMoveFunc()
+        end
+    end
+end)
+
+--// Auto-Flashstep heartbeat
+RunService.Heartbeat:Connect(autoFlashstepFunc)
+
+--// Telespeed on key press (only when enabled)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    -- Q key for Telespeed
+    if input.KeyCode == Enum.KeyCode.Q and telespeed.enabled then
+        telespeedFunc()
+    end
+end)
+
+--// Auto-Block heartbeat
+RunService.Heartbeat:Connect(autoBlockFunc)
+
+--// Anti-AFK heartbeat
+RunService.Heartbeat:Connect(antiAfkFunc)
+
+--// Auto-reapply on respawn
+LP.CharacterAdded:Connect(function(char)
+    task.wait(1)
+    autoFarm.attackRemote = LP.Backpack:FindFirstChild("Input") or char:FindFirstChild("Input")
+    autoFlashstep.remote = LP.Backpack:FindFirstChild("Input")
+    autoBlock.remote = LP.Backpack:FindFirstChild("Input")
+    autoMove.remote = LP.Backpack:FindFirstChild("Input")
+    telespeed.remote = LP.Backpack:FindFirstChild("Input")
+   
+    stopAggressiveRotation()
+    autoFarm.state = "behind"
+    autoBlock.lastBlockState = false
+end)
+
+Rayfield:Notify({
+    Title = "Rotem's Hub",
+    Content = "Successfully Loaded!",
+    Duration = 5,
+    Image = 4483362458
+})
